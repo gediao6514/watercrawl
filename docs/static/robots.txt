@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+Allow: /report/*
+Sitemap: https://watercrawl-navy.vercel.app/sitemap.xml
