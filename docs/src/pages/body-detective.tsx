@@ -1,159 +1,220 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
-import Layout from '@theme/Layout'
-import Head from '@docusaurus/Head'
+import React, { useState, useEffect, useRef } from 'react';
+import { 
+  MessageSquare, Camera, Send, Lock, CreditCard, 
+  Activity, Zap, Loader2, Globe, Search, CheckCircle, 
+  AlertTriangle, FileText, PlayCircle, ArrowRight, BookOpen
+} from 'lucide-react';
+import Layout from '@theme/Layout'; 
+import Head from '@docusaurus/Head';
 
-type Msg = { role: 'user' | 'ai'; content: string; imageUrl?: string }
-
-const systemPrompt = `你是“AI 身体侦探”。说人话、给结论、给动作，直接有效。结构：
-结论 → 原因 → 风险 → 今日行动（动作/组数/频率） → 复盘指标。`
-
-function initCredits(): number {
-  const raw = localStorage.getItem('bd_credits')
-  if (raw === null) {
-    localStorage.setItem('bd_credits', '2')
-    return 2
-  }
-  const n = parseInt(raw, 10)
-  if (Number.isNaN(n)) {
-    localStorage.setItem('bd_credits', '2')
-    return 2
-  }
-  return n
-}
-
-function setCredits(n: number) {
-  localStorage.setItem('bd_credits', String(n))
-}
-
-function aiTextFor(input: string, hasImage: boolean): string {
-  const tag = hasImage ? '（已读取体态图像）' : ''
-  return [
-    `结论：与你的描述相关的主要问题是姿势代偿与肌力不均衡${tag}`,
-    `原因：久坐与训练模式导致胸椎活动度不足、髋屈肌紧张、肩胛控制弱。`,
-    `风险：继续照旧可能加重局部炎症与代偿路径。`,
-    `今日行动：90/90呼吸 3×5；滚轴胸椎伸展 2×8；面拉 3×12；臀桥 3×10；髂腰肌拉伸 3×30秒。每周4次。`,
-    `复盘：疼痛(0-10)、僵硬评分、面拉与臀桥负重进展。`
-  ].join('\n')
-}
-
-export default function BodyDetectivePage(): JSX.Element {
-  const [messages, setMessages] = useState<Msg[]>([])
-  const [input, setInput] = useState('')
-  const [imageUrl, setImageUrl] = useState<string | undefined>(undefined)
-  const [credits, setCreditsState] = useState<number>(0)
-  const [paywallOpen, setPaywallOpen] = useState(false)
-  const fileRef = useRef<HTMLInputElement | null>(null)
-
-  useEffect(() => {
-    setCreditsState(initCredits())
-  }, [])
-
-  const canAsk = useMemo(() => credits > 0, [credits])
-
-  async function handleSend() {
-    const text = input.trim()
-    if (!text) return
-    if (!canAsk) {
-      setPaywallOpen(true)
-      return
+const BodyDetectivePage = () => {
+  // --- 状态管理 ---
+  const [credits, setCredits] = useState(2);
+  const [chatHistory, setChatHistory] = useState([
+    {
+      role: 'ai',
+      content: "👋 嗨，我是你的 AI 身体侦探。\n\n别担心那些听不懂的医学名词。告诉我你**哪里不舒服**（比如：'低头久了脖子酸'），我会用最简单的话告诉你**为什么**，以及**现在该做什么**。",
+      type: 'text'
     }
-    const userMsg: Msg = { role: 'user', content: text, imageUrl }
-    setMessages(prev => [...prev, userMsg])
-    setInput('')
-    await new Promise(r => setTimeout(r, 300))
-    const aiMsg: Msg = { role: 'ai', content: `${systemPrompt}\n\n${aiTextFor(text, Boolean(imageUrl))}` }
-    setMessages(prev => [...prev, aiMsg])
-    const next = credits - 1
-    setCredits(next)
-    setCreditsState(next)
-    if (next <= 0) setPaywallOpen(true)
-  }
+  ]);
+  const [input, setInput] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [showPaywall, setShowPaywall] = useState(false);
+  const chatEndRef = useRef(null);
 
-  function handlePickImage() {
-    fileRef.current?.click()
-  }
+  // --- SEO ---
+  const [seoTitle, setSeoTitle] = useState("AI 身体侦探 | 找到疼痛根源");
 
-  function onFileChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const f = e.target.files?.[0]
-    if (!f) return
-    const url = URL.createObjectURL(f)
-    setImageUrl(url)
-  }
+  // --- API ---
+  const apiKey = ""; // 运行时环境变量
+  const modelName = "gemini-2.5-flash-preview-09-2025";
 
-  function openCheckout() {
-    window.location.href = '/subscribe'
-  }
+  useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [chatHistory, isLoading]);
 
-  function clearAll() {
-    setMessages([])
-    setImageUrl(undefined)
-  }
+  const handleSend = async () => {
+    if (!input.trim()) return;
+    if (credits <= 0) { setShowPaywall(true); return; }
 
-  function resetCredits() {
-    setCredits(2)
-    setCreditsState(2)
-  }
+    const userMsg = input;
+    setChatHistory(prev => [...prev, { role: 'user', content: userMsg }]);
+    setInput('');
+    setIsLoading(true);
+    setCredits(prev => prev - 1);
+
+    if (userMsg.length < 20) setSeoTitle(`${userMsg} 的康复方案 | AI 身体侦探`);
+
+    try {
+      const systemPrompt = `
+        角色：你是一位经验丰富、说话风趣的康复教练。
+        核心任务：
+        1. **安抚**：先告诉用户这很常见。
+        2. **翻译**：把复杂的生物力学翻译成人话。
+        3. **行动**：只给 1-2 个立刻能做的动作。
+        4. **出口**：引导观看视频或下载指南。
+
+        请严格按以下 Markdown 格式输出（带 Emoji）：
+
+        ### 💡 发生了什么？ (The Truth)
+        (用大白话解释原理...)
+
+        ### 🛠️ 立刻自救 (Quick Fix)
+        * **动作 1**：(动作名称) - (怎么做)
+        * **动作 2**：(动作名称) - (怎么做)
+
+        ### 🚀 彻底解决 (The Exit)
+        (告诉用户需要系统训练，点击下方按钮。)
+      `;
+
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: userMsg }] }],
+            systemInstruction: { parts: [{ text: systemPrompt }] }
+          })
+        }
+      );
+
+      const data = await response.json();
+      const aiText = data.candidates?.[0]?.content?.parts?.[0]?.text || "侦探正在思考...";
+      
+      setChatHistory(prev => [...prev, { 
+        role: 'ai', 
+        content: aiText, 
+        type: 'report',
+        reportId: 'case-' + Date.now().toString(36)
+      }]);
+
+    } catch (error) {
+      setChatHistory(prev => [...prev, { role: 'ai', content: "网络开小差了，请重试。", type: 'text' }]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   return (
-    <Layout title="AI 身体侦探">
+    <Layout title={seoTitle} description="不吃药，不瞎练。AI 帮你找到疼痛根源。">
       <Head>
-        <title>AI 身体侦探</title>
-        <meta name="description" content="AI 驱动的线上生物力学诊所" />
+        <style>{`body { background-color: #050505; }`}</style>
       </Head>
-      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 py-12">
-        <div className="max-w-3xl mx-auto px-4">
-          <div className="mb-6 flex items-center justify-between">
-            <div>
-              <h1 className="text-3xl font-bold text-white">AI 身体侦探</h1>
-              <p className="text-slate-300">前 2 次免费诊断，第 3 次付费解锁（$19.90/月）</p>
+
+      <div className="flex flex-col items-center justify-center min-h-[calc(100vh-60px)] bg-[#050505] text-gray-100 p-4 font-sans">
+        <div className="w-full max-w-4xl h-[85vh] bg-[#111111]/90 backdrop-blur-xl border border-white/10 rounded-3xl shadow-2xl flex flex-col relative overflow-hidden ring-1 ring-white/5">
+            
+            {/* Header */}
+            <div className="px-6 py-4 border-b border-white/10 flex justify-between items-center z-10 bg-[#111]/50 backdrop-blur-md">
+                <div className="flex items-center gap-4">
+                    <div className="w-12 h-12 bg-gradient-to-br from-blue-600 to-cyan-400 rounded-2xl flex items-center justify-center shadow-lg shadow-blue-500/20">
+                      <Activity className="w-6 h-6 text-white" />
+                    </div>
+                    <div>
+                      <h1 className="text-lg font-bold text-white leading-tight">AI 身体侦探</h1>
+                      <p className="text-xs text-gray-400">Biomechanics Detective v4.0</p>
+                    </div>
+                </div>
+                <div className={`px-4 py-1.5 rounded-full text-xs font-bold flex items-center gap-2 border transition-all ${credits > 0 ? 'bg-blue-500/10 border-blue-500/30 text-blue-400' : 'bg-red-500/10 border-red-500/30 text-red-400'}`}>
+                    <Zap className="w-3 h-3 fill-current" />
+                    <span>剩余诊断: {credits} 次</span>
+                </div>
             </div>
-            <div className="flex items-center gap-2">
-              <span className="text-slate-200">剩余：{credits}</span>
-              <button className="px-3 py-1 rounded bg-slate-700 text-white hover:bg-slate-600" onClick={resetCredits}>重置额度</button>
-            </div>
-          </div>
-          <div className="rounded-2xl border border-white/10 bg-white/10 backdrop-blur-md shadow-xl">
-            <div className="p-4 flex gap-2">
-              <input className="flex-1 px-4 py-3 rounded-lg bg-white/20 text-white placeholder-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-400" type="text" placeholder="输入你的症状或训练困惑" value={input} onChange={e => setInput(e.target.value)} />
-              <button className="px-4 py-3 rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50" onClick={handleSend} disabled={!input}>发送</button>
-              <button className="px-4 py-3 rounded-lg bg-slate-700 text-white hover:bg-slate-600" onClick={handlePickImage}>上传图片</button>
-              <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={onFileChange} />
-            </div>
-            {imageUrl && (
-              <div className="px-4 pb-2">
-                <img src={imageUrl} alt="体态图像" className="rounded-xl border border-white/10" />
-              </div>
-            )}
-            <div className="px-4 pb-4">
-              <div className="flex gap-2 mb-3">
-                <button className="px-3 py-2 rounded-lg bg-slate-700 text-white hover:bg-slate-600" onClick={clearAll}>清空对话</button>
-                <button className="px-3 py-2 rounded-lg bg-emerald-600 text-white hover:bg-emerald-500" onClick={openCheckout}>去订阅</button>
-              </div>
-              <div className="space-y-4">
-                {messages.map((m, i) => (
-                  <div key={i} className={m.role === 'user' ? 'bg-white/10 rounded-xl p-4 text-white' : 'bg-slate-900/50 rounded-xl p-4 text-slate-200'}>
-                    <div className="font-semibold mb-1">{m.role === 'user' ? '你' : 'AI 侦探'}</div>
-                    <div className="whitespace-pre-wrap text-sm">{m.content}</div>
-                    {m.imageUrl && <img src={m.imageUrl} alt="附图" className="mt-3 rounded-xl border border-white/10" />}
-                  </div>
+
+            {/* Chat Area */}
+            <div className="flex-1 overflow-y-auto p-6 space-y-8 custom-scrollbar">
+                {chatHistory.map((msg, idx) => (
+                    <div key={idx} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'} animate-in fade-in slide-in-from-bottom-4 duration-500`}>
+                      <div className={`max-w-[95%] md:max-w-[85%] rounded-2xl p-5 md:p-6 relative ${
+                          msg.role === 'user' 
+                          ? 'bg-[#252525] text-white rounded-tr-none border border-white/10' 
+                          : 'bg-gradient-to-br from-[#1a1a1a] to-[#0f0f0f] border border-white/5 text-gray-300 rounded-tl-none shadow-xl'
+                      }`}>
+                          {msg.role === 'ai' && msg.type === 'report' && (
+                            <div className="flex items-center justify-between mb-4 pb-3 border-b border-white/10">
+                                <span className="text-xs font-bold text-blue-400 uppercase tracking-widest flex items-center gap-2">
+                                  <FileText className="w-4 h-4" /> 侦探报告
+                                </span>
+                                <span className="text-[10px] text-gray-500">Generated by Gemini AI</span>
+                            </div>
+                          )}
+                          <div className="prose prose-invert prose-sm max-w-none leading-relaxed">
+                            {typeof msg.content === 'string' && msg.content.split('\n').map((line, i) => {
+                              if (line.startsWith('###')) return <h3 key={i} className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-cyan-300 font-bold text-lg mt-6 mb-3">{line.replace('###', '')}</h3>
+                              if (line.startsWith('*')) return <li key={i} className="ml-4 text-gray-300 marker:text-blue-500 mb-1">{line.replace('*', '')}</li>
+                              return <p key={i} className="mb-2 text-gray-300">{line}</p>
+                            })}
+                          </div>
+                          {msg.role === 'ai' && msg.type === 'report' && (
+                            <div className="mt-6 pt-4 border-t border-white/10 flex flex-col sm:flex-row gap-3">
+                              <a href="https://www.youtube.com/@BodyTranslatorAlex" target="_blank" rel="noreferrer" 
+                                 className="flex-1 bg-blue-600 hover:bg-blue-500 text-white text-sm font-bold py-3 px-4 rounded-xl flex items-center justify-center gap-2 transition shadow-lg shadow-blue-900/20 cursor-pointer no-underline">
+                                <PlayCircle className="w-4 h-4" /> 观看视频教程
+                              </a>
+                              <a href="#" className="flex-1 bg-white/5 hover:bg-white/10 text-gray-200 text-sm font-bold py-3 px-4 rounded-xl flex items-center justify-center gap-2 transition border border-white/10 cursor-pointer no-underline">
+                                <BookOpen className="w-4 h-4" /> 下载自救指南
+                              </a>
+                            </div>
+                          )}
+                      </div>
+                    </div>
                 ))}
-              </div>
+                
+                {isLoading && (
+                    <div className="flex justify-start">
+                      <div className="bg-[#1a1a1a]/80 backdrop-blur border border-blue-500/20 p-4 rounded-2xl rounded-tl-none flex items-center gap-3 text-sm text-blue-300">
+                          <Loader2 className="w-5 h-5 animate-spin text-blue-500" />
+                          <span className="animate-pulse">侦探正在分析你的生物力学链条...</span>
+                      </div>
+                    </div>
+                )}
+                <div ref={chatEndRef} />
             </div>
-          </div>
+
+            {/* Input Area */}
+            <div className="p-5 bg-[#151515]/80 backdrop-blur-md border-t border-white/10 z-20">
+                <div className="relative flex items-center max-w-3xl mx-auto">
+                    <input
+                        type="text"
+                        value={input}
+                        onChange={(e) => setInput(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && handleSend()}
+                        placeholder={credits > 0 ? "简单描述你的症状（如：久坐后腰痛）..." : "今日免费额度已用尽"}
+                        disabled={credits <= 0 || isLoading}
+                        className="w-full bg-[#0a0a0a] border border-white/10 text-white pl-6 pr-14 py-4 rounded-2xl focus:outline-none focus:border-blue-500/50 focus:ring-2 focus:ring-blue-500/20 disabled:opacity-50 placeholder-gray-600 text-base shadow-inner transition-all"
+                    />
+                    <button 
+                        onClick={handleSend}
+                        disabled={credits <= 0 || isLoading || !input.trim()}
+                        className="absolute right-2 bg-gradient-to-r from-blue-600 to-cyan-500 text-white p-3 rounded-xl hover:brightness-110 disabled:grayscale disabled:opacity-50 transition shadow-lg"
+                    >
+                        {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
+                    </button>
+                </div>
+            </div>
+
+            {/* Paywall Modal */}
+            {showPaywall && (
+                <div className="absolute inset-0 bg-black/80 backdrop-blur-md z-50 flex flex-col items-center justify-center p-6 text-center animate-in fade-in duration-300">
+                    <div className="w-20 h-20 bg-gradient-to-br from-yellow-400 to-orange-500 rounded-3xl flex items-center justify-center mb-6 shadow-2xl shadow-orange-500/20 rotate-3">
+                        <Lock className="w-10 h-10 text-white" />
+                    </div>
+                    <h2 className="text-3xl font-bold text-white mb-3">解锁完整方案</h2>
+                    <p className="text-gray-400 text-sm mb-8 max-w-xs leading-relaxed">
+                        免费额度已用尽。订阅会员获取<br/><span className="text-yellow-400 font-bold">专属视频指导</span>。
+                    </p>
+                    <button 
+                        onClick={() => alert("Stripe Link Here")}
+                        className="w-full max-w-sm bg-white text-black font-bold py-4 rounded-xl flex items-center justify-center gap-2 hover:scale-105 transition shadow-xl"
+                    >
+                        <CreditCard className="w-5 h-5" /> 立即解锁 ($19.90/月)
+                    </button>
+                    <button onClick={() => setShowPaywall(false)} className="mt-6 text-xs text-gray-600 hover:text-gray-400 underline">稍后再说</button>
+                </div>
+            )}
         </div>
       </div>
-      {paywallOpen && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center">
-          <div className="max-w-md w-full rounded-2xl bg-white p-6 shadow-xl">
-            <div className="text-xl font-bold mb-2">侦探档案库已锁</div>
-            <div className="text-slate-700 mb-4">解锁月度会员（$19.90）继续追踪你的身体真相。</div>
-            <div className="flex gap-3">
-              <button className="px-4 py-2 rounded-lg bg-slate-800 text-white" onClick={() => setPaywallOpen(false)}>稍后</button>
-              <button className="px-4 py-2 rounded-lg bg-blue-600 text-white" onClick={openCheckout}>去支付</button>
-            </div>
-          </div>
-        </div>
-      )}
     </Layout>
-  )
-}
+  );
+};
+
+export default BodyDetectivePage;
